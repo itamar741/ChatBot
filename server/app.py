@@ -4,25 +4,44 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessageChunk, ToolMessage
 from dotenv import load_dotenv
 from langchain_community.tools.tavily_search import TavilySearchResults
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 import json
+import time
 from uuid import uuid4
 from langgraph.checkpoint.memory import MemorySaver
 
 load_dotenv()
 
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+
+# Message length limit
+MAX_MESSAGE_LENGTH = 500
+
+# Session quota constants
+SESSION_LIMIT = 20
+SESSION_WINDOW = 3600  # 1 hour in seconds
+
+# Tracking dictionaries
+session_requests = {}
+active_connections = {}
+
 class ChatState(TypedDict):
     messages: Annotated[list, add_messages]
 
-model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 search_tool = TavilySearchResults(max_results=4)
 memory = MemorySaver()
 tools = [search_tool]
-llm_with_tools = model.bind_tools(tools)
+llm_with_tools = llm.bind_tools(tools)
 
-async def model(state: ChatState) -> ChatState:
+async def model_node(state: ChatState) -> ChatState:
     result = await llm_with_tools.ainvoke(state["messages"])
     return {
     "messages": [result], 
@@ -55,7 +74,7 @@ async def tools_node(state: ChatState) -> ChatState:
     return {"messages": tool_messages}
 
 graph_builder = StateGraph(ChatState)
-graph_builder.add_node("model", model)
+graph_builder.add_node("model", model_node)
 graph_builder.add_node("tools_node", tools_node)
 graph_builder.set_entry_point("model")
 
@@ -65,6 +84,11 @@ graph_builder.add_edge("tools_node", "model")
 graph = graph_builder.compile(checkpointer=memory)
 
 app = FastAPI()
+
+# Configure rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Add CORS middleware with settings that match frontend requirements
 app.add_middleware(
@@ -109,6 +133,50 @@ def clean_json_string(value):
             # Not valid JSON, return as-is
             return value
     return value
+
+def check_session_quota(session_id: str):
+    current_time = time.time()
+    
+    if session_id not in session_requests:
+        session_requests[session_id] = {
+            "count": 0,
+            "start_time": current_time
+        }
+        
+        
+    
+    session_data = session_requests[session_id]
+    
+    # Reset if window expired
+    if current_time - session_data["start_time"] > SESSION_WINDOW:
+        session_data["count"] = 0
+        session_data["start_time"] = current_time
+    
+    # Check limit
+    if session_data["count"] >= SESSION_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="Session quota exceeded. Please try again later."
+        )
+    
+    # Increment counter
+    session_data["count"] += 1
+
+def check_active_connection(session_id: str):
+    if session_id in active_connections:
+        raise HTTPException(
+            status_code=429,
+            detail="Another request is already in progress"
+        )
+    active_connections[session_id] = True
+
+async def generate_chat_response_with_cleanup(message: str, checkpoint_id: Optional[str], session_id: str):
+    try:
+        async for chunk in generate_chat_response(message, checkpoint_id):
+            yield chunk
+    finally:
+        # Cleanup active connection
+        active_connections.pop(session_id, None)
 
 async def generate_chat_response(message: str, checkpoint_id: Optional[str] = None):
     is_new_conversation = checkpoint_id is None
@@ -193,11 +261,33 @@ async def generate_chat_response(message: str, checkpoint_id: Optional[str] = No
     yield f"data:{json.dumps(data_obj)}\n\n"
 
 @app.get("/chat_stream/{message}")
+@limiter.limit("5/minute")
 async def chat_stream(
+    request: Request,
     message: str,
+    session_id: str = Query(..., description="Session ID required"),
     checkpoint_id: Optional[str] = Query(None)
 ):
+    # 1. IP rate limit - handled by @limiter.limit decorator
+    
+    # 2. session_id validation - required parameter (400 if missing)
+    # Already enforced by Query(...)
+    
+    # 3. Message length check
+    if len(message) > MAX_MESSAGE_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail="Message too long"
+        )
+    
+    # 4. Session quota check
+    check_session_quota(session_id)
+    
+    # 5. Active SSE connection check
+    check_active_connection(session_id)
+    
+    # 6. Run LangGraph pipeline
     return StreamingResponse(
-        generate_chat_response(message, checkpoint_id),
+        generate_chat_response_with_cleanup(message, checkpoint_id, session_id),
         media_type="text/event-stream"
     )

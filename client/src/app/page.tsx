@@ -32,6 +32,15 @@ const Home = () => {
   const [currentMessage, setCurrentMessage] = useState("");
   const [checkpointId, setCheckpointId] = useState(null);
 
+  const getSessionId = (): string => {
+    let sessionId = localStorage.getItem("session_id");
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem("session_id", sessionId);
+    }
+    return sessionId;
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (currentMessage.trim()) {
@@ -70,14 +79,17 @@ const Home = () => {
           }
         ]);
 
+        // Get session ID
+        const sessionId = getSessionId();
+
         // Create URL with checkpoint ID if it exists
         // Use local server (default port 8000) or environment variable if set
         const serverUrl =process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:8000";
   
-        // Remote server uses path parameter: /chat_stream/{message}?checkpoint_id=...
-        let url = `${serverUrl}/chat_stream/${encodeURIComponent(userInput)}`;
+        // Remote server uses path parameter: /chat_stream/{message}?session_id=...&checkpoint_id=...
+        let url = `${serverUrl}/chat_stream/${encodeURIComponent(userInput)}?session_id=${encodeURIComponent(sessionId)}`;
         if (checkpointId) {
-          url += `?checkpoint_id=${encodeURIComponent(checkpointId)}`;
+          url += `&checkpoint_id=${encodeURIComponent(checkpointId)}`;
         }
 
         // Connect to SSE endpoint using EventSource
