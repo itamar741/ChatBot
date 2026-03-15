@@ -72,7 +72,8 @@ const Home = () => {
 
         // Create URL with checkpoint ID if it exists
         // Use local server (default port 8000) or environment variable if set
-        const serverUrl = 'https://perplexity-latest-e697.onrender.com';
+        const serverUrl =process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:8000";
+  
         // Remote server uses path parameter: /chat_stream/{message}?checkpoint_id=...
         let url = `${serverUrl}/chat_stream/${encodeURIComponent(userInput)}`;
         if (checkpointId) {
