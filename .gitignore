@@ -21,7 +21,6 @@
 /build
 
 # misc
-.DS_Store
 *.pem
 
 # debug
@@ -48,3 +47,25 @@ venv/
 
 # OS files
 .DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Python
+.python-version
+*.egg-info/
+dist/
+*.egg
+
+# Logs
+logs/
+*.log

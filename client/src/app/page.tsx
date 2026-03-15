@@ -24,11 +24,19 @@ const Home = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 1,
+      content: 'This chat is rate-limited to prevent abuse and ensure fair usage.',
+      isUser: false,
+      type: 'message'
+    },
+    {
+      id: 2,
       content: 'Hi there, how can I help you?',
       isUser: false,
       type: 'message'
     }
   ]);
+  
+  
   const [currentMessage, setCurrentMessage] = useState("");
   const [checkpointId, setCheckpointId] = useState(null);
 
@@ -84,7 +92,7 @@ const Home = () => {
 
         // Create URL with checkpoint ID if it exists
         // Use local server (default port 8000) or environment variable if set
-        const serverUrl =process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:8000";
+        const serverUrl =   process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:8000";
   
         // Remote server uses path parameter: /chat_stream/{message}?session_id=...&checkpoint_id=...
         let url = `${serverUrl}/chat_stream/${encodeURIComponent(userInput)}?session_id=${encodeURIComponent(sessionId)}`;
@@ -93,14 +101,24 @@ const Home = () => {
         }
 
         // Connect to SSE endpoint using EventSource
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:96',message:'Creating EventSource',data:{url:url,sessionId:sessionId},timestamp:Date.now(),runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
         const eventSource = new EventSource(url);
         let streamedContent = "";
         let searchData: SearchInfo | null = null;
         let hasReceivedContent = false;
+        let hasReceivedError = false;
 
         eventSource.onmessage = (event) => {
           try {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:102',message:'onmessage received',data:{rawData:event.data,hasReceivedError:hasReceivedError,hasReceivedContent:hasReceivedContent,streamedContentLength:streamedContent.length},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
             const data = JSON.parse(event.data);
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:105',message:'Parsed event data',data:{dataType:data.type,dataMessage:data.message||null},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
         
             if (data.type === 'checkpoint') {
               setCheckpointId(data.checkpoint_id);
@@ -186,30 +204,65 @@ const Home = () => {
                   )
                 );
               }
-        
               eventSource.close();
+            }
+
+            else if (data.type === "error") {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:193',message:'Error message received via onmessage',data:{errorMessage:data.message,hasReceivedErrorBefore:hasReceivedError},timestamp:Date.now(),runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+                // #endregion
+                hasReceivedError = true;
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:195',message:'Setting hasReceivedError to true',data:{hasReceivedError:true},timestamp:Date.now(),runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+                // #endregion
+                console.log("Error message:", data.message);
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === aiResponseId
+                      ? { ...msg, content: data.message, isLoading: false }
+                      : msg
+                  )
+                );  
+                eventSource.close();
+                return;
             }
         
           } catch (error) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:207',message:'Error parsing event data',data:{error:String(error),rawData:event.data},timestamp:Date.now(),runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+            // #endregion
             console.error("Error parsing event data:", error, event.data);
           }
         };
         
         // Handle errors
         eventSource.onerror = (error) => {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:212',message:'onerror called',data:{hasReceivedError:hasReceivedError,hasReceivedContent:hasReceivedContent,streamedContentLength:streamedContent.length},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
           console.error("EventSource error:", error);
-          eventSource.close();
-
-          // Only update with error if we don't have content yet
-          if (!streamedContent) {
-            setMessages(prev =>
-              prev.map(msg =>
-                msg.id === aiResponseId
-                  ? { ...msg, content: "Sorry, there was an error processing your request.", isLoading: false }
-                  : msg
-              )
-            );
-          }
+          
+          // Wait a bit to see if we receive an error message through onmessage
+          // The server sends errors with status 200, so they should come through onmessage
+          setTimeout(() => {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:217',message:'onerror setTimeout callback',data:{hasReceivedError:hasReceivedError,hasReceivedContent:hasReceivedContent,streamedContentLength:streamedContent.length,willShowGenericError:(!streamedContent && !hasReceivedContent && !hasReceivedError)},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+            // #endregion
+            // Only show generic error if we haven't received any content or error message
+            if (!streamedContent && !hasReceivedContent && !hasReceivedError) {
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/53cd6225-d9d3-4719-aaf4-51e4e03e6b12',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:220',message:'Showing generic error message',data:{reason:'No content or error received'},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+              // #endregion
+              setMessages(prev =>
+                prev.map(msg =>
+                  msg.id === aiResponseId
+                    ? { ...msg, content: "Sorry, there was an error processing your request.", isLoading: false }
+                    : msg
+                )
+              );
+            }
+            eventSource.close();
+          }, 100);
         };
 
         // Listen for end event

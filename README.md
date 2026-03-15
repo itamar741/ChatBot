@@ -1,6 +1,10 @@
 # ChatBot - AI-Powered Chat Application with Web Search
 
-A modern, full-stack chat application powered by LangChain, LangGraph, and OpenAI's GPT models. The application features real-time streaming responses, web search capabilities via Tavily, and a clean, responsive React/Next.js frontend.
+A modern full-stack AI chat application with real-time streaming responses and integrated web search.
+
+## 🚀 Live Demo
+
+Try the application live at: **[chat-bot-nu-rose.vercel.app](https://chat-bot-nu-rose.vercel.app)**
 
 ## Features
 
@@ -10,6 +14,11 @@ A modern, full-stack chat application powered by LangChain, LangGraph, and OpenA
 - 💾 **Conversation Memory**: Persistent conversation state using LangGraph checkpoints
 - 🎨 **Modern UI**: Clean, responsive interface built with React, Next.js, and Tailwind CSS
 - 🔄 **State Management**: Robust state management with conversation threading
+- 🔒 **Advanced Security**: Multi-layer protection with rate limiting, session management, and connection limits
+
+### 🛡 Usage Limits
+
+The API includes rate limiting, session quotas, and connection guards to prevent abuse and ensure fair usage.
 
 ## Tech Stack
 
@@ -21,6 +30,7 @@ A modern, full-stack chat application powered by LangChain, LangGraph, and OpenA
 - **OpenAI**: GPT-4o-mini model for chat completions
 - **Tavily Search**: Real-time web search API
 - **Uvicorn**: ASGI server for FastAPI
+- **SlowAPI**: Rate limiting middleware for FastAPI
 
 ### Frontend
 - **Next.js 15**: React framework with App Router
@@ -34,6 +44,7 @@ A modern, full-stack chat application powered by LangChain, LangGraph, and OpenA
 ChatBot/
 ├── server/                 # Backend FastAPI application
 │   ├── app.py             # Main application file
+│   ├── guards.py          # Rate limiting and abuse protection    
 │   ├── requirements.txt   # Python dependencies
 │   └── Dockerfile         # Docker configuration
 ├── client/                # Frontend Next.js application
@@ -137,8 +148,15 @@ docker run -p 8000:8000 --env-file .env chatbot-server
 Stream chat responses using Server-Sent Events (SSE).
 
 **Parameters:**
-- `message` (path): The user's message
+- `message` (path): The user's message (max 500 characters)
+- `session_id` (query, required): Unique session identifier for rate limiting and security
 - `checkpoint_id` (query, optional): Conversation checkpoint ID for continuing a conversation
+
+**Rate Limits:**
+- 5 requests per minute per IP address
+- 15 requests per 10 minutes per session
+- Maximum 5 concurrent connections per IP
+- 1 second cooldown between requests per session
 
 **Response:**
 SSE stream with the following event types:
@@ -170,7 +188,7 @@ SSE stream with the following event types:
 
 **Example:**
 ```bash
-curl -N "http://localhost:8000/chat_stream/hello?checkpoint_id=abc123"
+curl -N "http://localhost:8000/chat_stream/hello?session_id=test123&checkpoint_id=abc123"
 ```
 
 ## How It Works
@@ -183,6 +201,29 @@ curl -N "http://localhost:8000/chat_stream/hello?checkpoint_id=abc123"
    - Streams responses back via SSE
 4. **Frontend receives and displays** streaming chunks in real-time
 5. **Conversation state** is maintained using LangGraph checkpoints
+
+## Security Features
+
+The application includes comprehensive security measures implemented in `server/guards.py`:
+
+### Rate Limiting
+- **IP-level rate limiting**: 5 requests per minute per IP address (using SlowAPI)
+- **Session-level quota**: 15 requests per 10-minute window per session
+- **Connection limits**: Maximum 5 concurrent SSE connections per IP address
+- **Cooldown protection**: 1 second minimum between requests per session
+
+### Session Management
+- **Session-IP binding**: Sessions are bound to IP addresses to prevent session hijacking
+- **Session quota tracking**: Automatic cleanup of expired session data
+- **Active connection tracking**: Prevents duplicate concurrent requests from the same session
+
+### Origin Protection
+- **CORS configuration**: Restricted to allowed origins only
+- **Origin validation**: Server-side validation of request origins
+
+### Input Validation
+- **Message length limits**: Maximum 500 characters per message
+- **Session ID validation**: Maximum 100 characters, validated format
 
 ## Configuration
 

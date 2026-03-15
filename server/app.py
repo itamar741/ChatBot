@@ -7,75 +7,117 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-import json
-import time
-from uuid import uuid4
 from langgraph.checkpoint.memory import MemorySaver
+
+from guards import (
+    get_real_ip,
+    protect_session,
+    check_session_quota,
+    check_active_connection,
+    protect_connections,
+    protect_cooldown,
+    cleanup_connection,
+    MAX_MESSAGE_LENGTH,
+    protect_origin
+)
+
+import json
+from uuid import uuid4
 
 load_dotenv()
 
-# Rate limiting
-limiter = Limiter(key_func=get_remote_address)
+# -------------------------------
+# SSE HEADERS
+# Prevent proxy buffering for SSE
+# -------------------------------
 
-# Message length limit
-MAX_MESSAGE_LENGTH = 500
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
+}
 
-# Session quota constants
-SESSION_LIMIT = 20
-SESSION_WINDOW = 3600  # 1 hour in seconds
+# -------------------------------
+# Rate limiter (IP level)
+# -------------------------------
 
-# Tracking dictionaries
-session_requests = {}
-active_connections = {}
+limiter = Limiter(key_func=get_real_ip)
+
+# -------------------------------
+# LangGraph state
+# -------------------------------
 
 class ChatState(TypedDict):
     messages: Annotated[list, add_messages]
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
 search_tool = TavilySearchResults(max_results=4)
+
 memory = MemorySaver()
+
 tools = [search_tool]
 llm_with_tools = llm.bind_tools(tools)
 
+# -------------------------------
+# LangGraph nodes
+# -------------------------------
+
 async def model_node(state: ChatState) -> ChatState:
+
     result = await llm_with_tools.ainvoke(state["messages"])
-    return {
-    "messages": [result], 
-}
 
-async def tools_router(state: ChatState) -> ChatState:
-    last_message = state["messages"][-1]
-    if hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0:
+    return {"messages": [result]}
+
+
+async def tools_router(state: ChatState):
+
+    last = state["messages"][-1]
+
+    if hasattr(last, "tool_calls") and len(last.tool_calls) > 0:
         return "tools_node"
-    else: return END
 
-async def tools_node(state: ChatState) -> ChatState:
-    last_message = state["messages"][-1]
-    tool_calls = last_message.tool_calls
+    return END
+
+
+async def tools_node(state: ChatState):
+
+    last = state["messages"][-1]
+
     tool_messages = []
-    for tool_call in tool_calls:
-        tool_name = tool_call["name"   ]
+
+    for tool_call in last.tool_calls:
+
+        tool_name = tool_call["name"]
         tool_args = tool_call["args"]
         tool_id = tool_call["id"]
-        
-        if tool_name == "tavily_search_results_json":
-            search_results = await search_tool.ainvoke(tool_args)
 
-            tool_message =ToolMessage(
-                content=str(search_results),
-                tool_call_id=tool_id,
-                name=tool_name,
+        if tool_name == "tavily_search_results_json":
+
+            results = await search_tool.ainvoke(tool_args)
+
+            tool_messages.append(
+                ToolMessage(
+                    content=str(results),
+                    tool_call_id=tool_id,
+                    name=tool_name
                 )
-            tool_messages.append(tool_message)
+            )
+
     return {"messages": tool_messages}
 
+# -------------------------------
+# Build LangGraph
+# -------------------------------
+
 graph_builder = StateGraph(ChatState)
+
 graph_builder.add_node("model", model_node)
 graph_builder.add_node("tools_node", tools_node)
+
 graph_builder.set_entry_point("model")
 
 graph_builder.add_conditional_edges("model", tools_router)
@@ -83,24 +125,77 @@ graph_builder.add_edge("tools_node", "model")
 
 graph = graph_builder.compile(checkpointer=memory)
 
+# -------------------------------
+# FastAPI app
+# -------------------------------
+
 app = FastAPI()
 
-# Configure rate limiter
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# Add CORS middleware with settings that match frontend requirements
+# -------------------------------
+# CORS
+# -------------------------------
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"], 
-    expose_headers=["Content-Type"], 
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# ---------------------------------------------------
+# System message helper
+# Sends errors as chat messages
+# ---------------------------------------------------
+
+async def system_message_stream(message: str):
+
+    yield f"data:{json.dumps({'type':'content','content':message})}\n\n"
+
+    yield f"data:{json.dumps({'type':'end'})}\n\n"
+
+# ---------------------------------------------------
+# HTTPException handler
+# Converts all errors into SSE messages
+# ---------------------------------------------------
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+
+    if request.url.path.startswith("/chat_stream"):
+
+        return StreamingResponse(
+            system_message_stream(str(exc.detail)),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS
+        )
+
+    raise exc
+
+# ---------------------------------------------------
+# Rate limit handler
+# ---------------------------------------------------
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+
+    return StreamingResponse(
+        system_message_stream(
+            "Too many requests. Please slow down. (IP limit)"
+        ),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS
+    )
+
+# ---------------------------------------------------
+# Helpers
+# ---------------------------------------------------
+
 def serialise_ai_message_chunk(chunk):
+
     if not isinstance(chunk, AIMessageChunk):
         return ""
 
@@ -110,184 +205,115 @@ def serialise_ai_message_chunk(chunk):
         return content
 
     if isinstance(content, list):
+
         text = ""
+
         for block in content:
+
             if isinstance(block, dict) and "text" in block:
                 text += block["text"]
+
         return text
 
     return ""
 
-def clean_json_string(value):
-    """
-    Clean JSON-encoded strings to prevent double-encoding.
-    Attempts to parse any string value as JSON. If successful, returns the parsed value.
-    If parsing fails, returns the original value.
-    This catches all cases: "text", ["url"], "https://...", etc.
-    """
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            return parsed
-        except (json.JSONDecodeError, ValueError):
-            # Not valid JSON, return as-is
-            return value
-    return value
+# ---------------------------------------------------
+# Streaming response from LangGraph
+# ---------------------------------------------------
 
-def check_session_quota(session_id: str):
-    current_time = time.time()
-    
-    if session_id not in session_requests:
-        session_requests[session_id] = {
-            "count": 0,
-            "start_time": current_time
-        }
-        
-        
-    
-    session_data = session_requests[session_id]
-    
-    # Reset if window expired
-    if current_time - session_data["start_time"] > SESSION_WINDOW:
-        session_data["count"] = 0
-        session_data["start_time"] = current_time
-    
-    # Check limit
-    if session_data["count"] >= SESSION_LIMIT:
-        raise HTTPException(
-            status_code=429,
-            detail="Session quota exceeded. Please try again later."
-        )
-    
-    # Increment counter
-    session_data["count"] += 1
+async def generate_chat_response(message: str, checkpoint_id: Optional[str]):
 
-def check_active_connection(session_id: str):
-    if session_id in active_connections:
-        raise HTTPException(
-            status_code=429,
-            detail="Another request is already in progress"
-        )
-    active_connections[session_id] = True
-
-async def generate_chat_response_with_cleanup(message: str, checkpoint_id: Optional[str], session_id: str):
     try:
-        async for chunk in generate_chat_response(message, checkpoint_id):
-            yield chunk
-    finally:
-        # Cleanup active connection
-        active_connections.pop(session_id, None)
 
-async def generate_chat_response(message: str, checkpoint_id: Optional[str] = None):
-    is_new_conversation = checkpoint_id is None
+        if checkpoint_id is None:
 
-    if is_new_conversation:
-        new_checkpoint_id = str(uuid4())
+            checkpoint_id = str(uuid4())
+
+            yield f"data:{json.dumps({'type':'checkpoint','checkpoint_id':checkpoint_id})}\n\n"
+
         config = {
-            "configurable" :{
-                "thread_id": new_checkpoint_id
-            }
-        }
-
-        events = graph.astream_events(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
-            version="v2"
-        )
-
-        yield f"data:{{\"type\":\"checkpoint\",\"checkpoint_id\":\"{new_checkpoint_id}\"}}\n\n"
-
-    else:
-        config = {
-            "configurable" :{
+            "configurable": {
                 "thread_id": checkpoint_id
             }
         }
+
         events = graph.astream_events(
             {"messages": [HumanMessage(content=message)]},
             config=config,
             version="v2"
         )
 
-    async for event in events:
-        print(event["event"])
-        event_type = event["event"]
-        if event_type == "on_chat_model_stream":
-            chunk_content = serialise_ai_message_chunk(event["data"]["chunk"])
-            # Clean JSON-encoded strings to prevent double-encoding
-            content = clean_json_string(chunk_content) if isinstance(chunk_content, str) else ""
-            # Ensure content is a string (in case clean_json_string returned something else)
-            if not isinstance(content, str):
-                content = str(content) if content else ""
-            data_obj = {
-                "type": "content",
-                "content": content
-            }
-            yield f"data:{json.dumps(data_obj)}\n\n"
-        elif event_type == "on_chat_model_end":
-            tool_calls = event["data"]["output"].tool_calls if hasattr(event["data"]["output"], "tool_calls") else []
-            if tool_calls:
-                search_query = tool_calls[0]["args"].get("query", "")
-                # Clean JSON-encoded strings to prevent double-encoding
-                search_query = clean_json_string(search_query)
-                # Ensure search_query is a string
-                if not isinstance(search_query, str):
-                    search_query = str(search_query) if search_query else ""
-                data_obj = {"type": "search_start", "query": search_query}
-                yield f"data:{json.dumps(data_obj)}\n\n"
+        async for event in events:
 
-        elif event_type == "on_tool_end" and event["name"] == "tavily_search_results_json":
-            output = event["data"]["output"]
-            # First level: clean output itself (might be JSON string)
-            output = clean_json_string(output)
+            if event["event"] == "on_chat_model_stream":
 
-            # Second level: extract URLs from list
-            if isinstance(output, list):
-                urls = []
-                for item in output:
-                    if isinstance(item, dict) and "url" in item:
-                        url = item["url"]
-                        # Clean URL in case it's also JSON-encoded
-                        url = clean_json_string(url)
-                        # Ensure URL is a string
-                        if not isinstance(url, str):
-                            url = str(url) if url else ""
-                        urls.append(url)
-                
-                data_obj = {"type": "search_results", "urls": urls}
-                yield f"data:{json.dumps(data_obj)}\n\n"
-    
-    data_obj = {"type": "end"}
-    yield f"data:{json.dumps(data_obj)}\n\n"
+                chunk = serialise_ai_message_chunk(
+                    event["data"]["chunk"]
+                )
+
+                yield f"data:{json.dumps({'type':'content','content':chunk})}\n\n"
+
+        yield f"data:{json.dumps({'type':'end'})}\n\n"
+
+    except Exception as e:
+
+        async for chunk in system_message_stream(str(e)):
+            yield chunk
+
+# ---------------------------------------------------
+# Main SSE endpoint
+# ---------------------------------------------------
 
 @app.get("/chat_stream/{message}")
 @limiter.limit("5/minute")
 async def chat_stream(
     request: Request,
     message: str,
-    session_id: str = Query(..., description="Session ID required"),
+    session_id: str = Query(...),
     checkpoint_id: Optional[str] = Query(None)
 ):
-    # 1. IP rate limit - handled by @limiter.limit decorator
-    
-    # 2. session_id validation - required parameter (400 if missing)
-    # Already enforced by Query(...)
-    
-    # 3. Message length check
+
+    protect_origin(request)
+    ip = get_real_ip(request)
+
+    # -------------------------
+    # Basic validation
+    # -------------------------
+
+    if len(session_id) > 100:
+        raise HTTPException(400, "Invalid session ID")
+
     if len(message) > MAX_MESSAGE_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail="Message too long"
-        )
-    
-    # 4. Session quota check
+        raise HTTPException(400, "Message too long (max 500 characters)")
+
+    # -------------------------
+    # Security guards
+    # -------------------------
+
+    protect_session(session_id, ip)
+    protect_connections(ip)
+    protect_cooldown(session_id)
+
     check_session_quota(session_id)
-    
-    # 5. Active SSE connection check
     check_active_connection(session_id)
-    
-    # 6. Run LangGraph pipeline
+
+    # -------------------------
+    # Streaming
+    # -------------------------
+
+    async def stream():
+
+        try:
+
+            async for chunk in generate_chat_response(message, checkpoint_id):
+                yield chunk
+
+        finally:
+
+            cleanup_connection(session_id, ip)
+
     return StreamingResponse(
-        generate_chat_response_with_cleanup(message, checkpoint_id, session_id),
-        media_type="text/event-stream"
+        stream(),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS
     )
