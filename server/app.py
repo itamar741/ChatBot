@@ -11,9 +11,6 @@ import json
 from uuid import uuid4
 from langgraph.checkpoint.memory import MemorySaver
 
-from uuid import uuid4
-import json
-
 load_dotenv()
 
 class ChatState(TypedDict):
@@ -97,6 +94,22 @@ def serialise_ai_message_chunk(chunk):
 
     return ""
 
+def clean_json_string(value):
+    """
+    Clean JSON-encoded strings to prevent double-encoding.
+    Attempts to parse any string value as JSON. If successful, returns the parsed value.
+    If parsing fails, returns the original value.
+    This catches all cases: "text", ["url"], "https://...", etc.
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed
+        except (json.JSONDecodeError, ValueError):
+            # Not valid JSON, return as-is
+            return value
+    return value
+
 async def generate_chat_response(message: str, checkpoint_id: Optional[str] = None):
     is_new_conversation = checkpoint_id is None
 
@@ -133,8 +146,11 @@ async def generate_chat_response(message: str, checkpoint_id: Optional[str] = No
         event_type = event["event"]
         if event_type == "on_chat_model_stream":
             chunk_content = serialise_ai_message_chunk(event["data"]["chunk"])
-            # Build the data object and serialize it once to avoid double-encoding
-            content = chunk_content if isinstance(chunk_content, str) else ""
+            # Clean JSON-encoded strings to prevent double-encoding
+            content = clean_json_string(chunk_content) if isinstance(chunk_content, str) else ""
+            # Ensure content is a string (in case clean_json_string returned something else)
+            if not isinstance(content, str):
+                content = str(content) if content else ""
             data_obj = {
                 "type": "content",
                 "content": content
@@ -144,20 +160,32 @@ async def generate_chat_response(message: str, checkpoint_id: Optional[str] = No
             tool_calls = event["data"]["output"].tool_calls if hasattr(event["data"]["output"], "tool_calls") else []
             if tool_calls:
                 search_query = tool_calls[0]["args"].get("query", "")
-                # Build the data object and serialize it once to avoid double-encoding
+                # Clean JSON-encoded strings to prevent double-encoding
+                search_query = clean_json_string(search_query)
+                # Ensure search_query is a string
+                if not isinstance(search_query, str):
+                    search_query = str(search_query) if search_query else ""
                 data_obj = {"type": "search_start", "query": search_query}
                 yield f"data:{json.dumps(data_obj)}\n\n"
 
         elif event_type == "on_tool_end" and event["name"] == "tavily_search_results_json":
             output = event["data"]["output"]
+            # First level: clean output itself (might be JSON string)
+            output = clean_json_string(output)
 
+            # Second level: extract URLs from list
             if isinstance(output, list):
                 urls = []
                 for item in output:
                     if isinstance(item, dict) and "url" in item:
-                        urls.append(item["url"])
+                        url = item["url"]
+                        # Clean URL in case it's also JSON-encoded
+                        url = clean_json_string(url)
+                        # Ensure URL is a string
+                        if not isinstance(url, str):
+                            url = str(url) if url else ""
+                        urls.append(url)
                 
-                # Build the data object and serialize it once to avoid double-encoding
                 data_obj = {"type": "search_results", "urls": urls}
                 yield f"data:{json.dumps(data_obj)}\n\n"
     

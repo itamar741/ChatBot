@@ -1,105 +1,268 @@
-# Perplexity 2.0
+# ChatBot - AI-Powered Chat Application with Web Search
 
-A modern, responsive AI chat interface with integrated web search functionality. Perplexity 2.0 provides a clean UI similar to Perplexity.ai, combining conversational AI with real-time search capabilities
+A modern, full-stack chat application powered by LangChain, LangGraph, and OpenAI's GPT models. The application features real-time streaming responses, web search capabilities via Tavily, and a clean, responsive React/Next.js frontend.
 
-## ✨ Features
+## Features
 
-- **Real-time AI Responses** - Stream AI responses as they're generated
-- **Integrated Web Search** - AI can search the web for up-to-date information
-- **Conversation Memory** - Maintains context throughout your conversation
-- **Search Process Transparency** - Visual indicators show searching, reading, and writing stages
-- **Responsive Design** - Clean, modern UI that works across devices
+- 🤖 **AI-Powered Conversations**: Powered by OpenAI's GPT-4o-mini model
+- 🔍 **Web Search Integration**: Automatic web search using Tavily Search API for up-to-date information
+- 📡 **Real-Time Streaming**: Server-Sent Events (SSE) for real-time response streaming
+- 💾 **Conversation Memory**: Persistent conversation state using LangGraph checkpoints
+- 🎨 **Modern UI**: Clean, responsive interface built with React, Next.js, and Tailwind CSS
+- 🔄 **State Management**: Robust state management with conversation threading
 
-## 🏗️ Architecture
+## Tech Stack
 
-Perplexity 2.0 follows a client-server architecture:
+### Backend
+- **Python 3.12+**
+- **FastAPI**: Modern, fast web framework for building APIs
+- **LangChain**: Framework for developing applications powered by language models
+- **LangGraph**: Build stateful, multi-actor applications with LLMs
+- **OpenAI**: GPT-4o-mini model for chat completions
+- **Tavily Search**: Real-time web search API
+- **Uvicorn**: ASGI server for FastAPI
 
-### Client (Next.js + React)
-- Modern React application built with Next.js
-- Real-time streaming updates using Server-Sent Events (SSE)
-- Components for message display, search status, and input handling
+### Frontend
+- **Next.js 15**: React framework with App Router
+- **React 19**: UI library
+- **TypeScript**: Type-safe JavaScript
+- **Tailwind CSS 4**: Utility-first CSS framework
 
-### Server (FastAPI + LangGraph)
-- Python backend using FastAPI for API endpoints
-- LangGraph implementation for conversation flow with LLM and tools
-- Integration with Tavily Search API for web searching capabilities
-- Server-Sent Events for real-time streaming of AI responses
+## Project Structure
 
-## 🚀 Getting Started
+```
+ChatBot/
+├── server/                 # Backend FastAPI application
+│   ├── app.py             # Main application file
+│   ├── requirements.txt   # Python dependencies
+│   └── Dockerfile         # Docker configuration
+├── client/                # Frontend Next.js application
+│   ├── src/
+│   │   ├── app/          # Next.js app directory
+│   │   │   ├── page.tsx  # Main chat page
+│   │   │   └── layout.tsx
+│   │   └── components/    # React components
+│   │       ├── Header.tsx
+│   │       ├── InputBar.tsx
+│   │       └── MessageArea.tsx
+│   ├── package.json      # Node.js dependencies
+│   └── tsconfig.json
+└── README.md
+```
 
-### Prerequisites
+## Prerequisites
 
-- Node.js 18+
-- Python 3.10+
-- OpenAI API key
-- Tavily API key
+- **Python 3.12+** (for backend)
+- **Node.js 20+** and **npm** (for frontend)
+- **OpenAI API Key**: Get one from [OpenAI Platform](https://platform.openai.com/)
+- **Tavily API Key**: Get one from [Tavily](https://tavily.com/)
 
-### Installation
+## Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/harishneel1/perplexity_2.0.git
-   cd perplexity_2.0
+### Backend Setup
 
-2. **Set up the server**
-   ```bash
-   cd server
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-
-3. **Configure environment variables**  
-   Create a `.env` file in the server directory:
-   OPENAI_API_KEY=your_openai_api_key
-   TAVILY_API_KEY=your_tavily_api_key
-   
-4. **Set up the client**
+1. Navigate to the server directory:
 ```bash
-cd ../client
+cd server
+```
+
+2. Create a virtual environment:
+```bash
+python -m venv venv
+```
+
+3. Activate the virtual environment:
+   - **Windows**: `venv\Scripts\activate`
+   - **macOS/Linux**: `source venv/bin/activate`
+
+4. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+5. Create a `.env` file in the `server` directory:
+```env
+OPENAI_API_KEY=your_openai_api_key_here
+TAVILY_API_KEY=your_tavily_api_key_here
+```
+
+### Frontend Setup
+
+1. Navigate to the client directory:
+```bash
+cd client
+```
+
+2. Install dependencies:
+```bash
 npm install
+```
 
-### Running the Application
+## Running the Application
 
-1. **Start the server**
-   ```bash
-   cd server
-   uvicorn app:app --reload
+### Start the Backend Server
 
-2. **Start the client**
-   ```bash
-   cd client
-   npm run dev
+From the `server` directory:
 
-3. **Open your browser and navigate to http://localhost:3000**   
+```bash
+uvicorn app:app --reload --port 8000
+```
 
-## 🔍 How It Works
+The server will start on `http://localhost:8000`
 
-1. **User sends a message** through the chat interface
-2. **Server processes the message** using GPT-4o
-3. **AI decides** whether to use search or respond directly
-4. If search is needed:
-   - Search query is sent to Tavily API
-   - Results are processed and provided back to the AI
-   - AI uses this information to formulate a response
-5. **Response is streamed** back to the client in real-time
-6. **Search stages are displayed** to the user (searching, reading, writing)
+### Start the Frontend Development Server
 
-## 🤝 Contributing
+From the `client` directory:
+
+```bash
+npm run dev
+```
+
+The frontend will start on `http://localhost:3000`
+
+### Using Docker (Backend)
+
+Build and run the Docker container:
+
+```bash
+cd server
+docker build -t chatbot-server .
+docker run -p 8000:8000 --env-file .env chatbot-server
+```
+
+## API Endpoints
+
+### `GET /chat_stream/{message}`
+
+Stream chat responses using Server-Sent Events (SSE).
+
+**Parameters:**
+- `message` (path): The user's message
+- `checkpoint_id` (query, optional): Conversation checkpoint ID for continuing a conversation
+
+**Response:**
+SSE stream with the following event types:
+
+- `checkpoint`: New conversation checkpoint ID
+  ```json
+  {"type":"checkpoint","checkpoint_id":"uuid"}
+  ```
+
+- `content`: Streaming content chunks
+  ```json
+  {"type":"content","content":"text chunk"}
+  ```
+
+- `search_start`: Web search initiated
+  ```json
+  {"type":"search_start","query":"search query"}
+  ```
+
+- `search_results`: Web search results
+  ```json
+  {"type":"search_results","urls":["url1","url2"]}
+  ```
+
+- `end`: Stream completed
+  ```json
+  {"type":"end"}
+  ```
+
+**Example:**
+```bash
+curl -N "http://localhost:8000/chat_stream/hello?checkpoint_id=abc123"
+```
+
+## How It Works
+
+1. **User sends a message** through the frontend
+2. **Frontend creates an EventSource** connection to the backend SSE endpoint
+3. **Backend processes the message** using LangGraph:
+   - Sends message to OpenAI GPT-4o-mini
+   - If tool calls are needed (e.g., web search), executes them
+   - Streams responses back via SSE
+4. **Frontend receives and displays** streaming chunks in real-time
+5. **Conversation state** is maintained using LangGraph checkpoints
+
+## Configuration
+
+### Environment Variables
+
+**Backend** (`.env` in `server/` directory):
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `TAVILY_API_KEY`: Your Tavily Search API key
+
+**Frontend** (optional):
+- `NEXT_PUBLIC_SERVER_URL`: Custom server URL (defaults to `http://localhost:8000`)
+
+### Server Configuration
+
+The server can be configured in `app.py`:
+- **Model**: Change `model="gpt-4o-mini"` to use a different OpenAI model
+- **Search Results**: Adjust `max_results=4` in `TavilySearchResults` to change the number of search results
+- **Port**: Modify the port in the uvicorn command or Dockerfile
+
+## Troubleshooting
+
+### Common Issues
+
+1. **CORS Errors**
+   - Ensure the backend CORS middleware is configured correctly
+   - Check that the frontend is connecting to the correct server URL
+
+2. **API Key Errors**
+   - Verify your `.env` file exists and contains valid API keys
+   - Ensure environment variables are loaded correctly
+
+3. **Connection Issues**
+   - Check that both servers are running
+   - Verify the server URL in the frontend matches the backend port
+
+4. **JSON Parsing Errors**
+   - The server now handles JSON encoding correctly
+   - If you encounter issues, check the server logs
+
+## Development
+
+### Backend Development
+
+The backend uses FastAPI with automatic reloading. Changes to `app.py` will automatically reload the server.
+
+### Frontend Development
+
+The frontend uses Next.js with hot module replacement. Changes to React components will update automatically in the browser.
+
+### Code Quality
+
+- **Python**: Follow PEP 8 style guidelines
+- **TypeScript**: Use strict type checking
+- **React**: Follow React best practices and hooks patterns
+
+## Technical Notes
+
+### JSON Encoding Fix
+
+The application includes a robust solution for handling double-encoded JSON from LangGraph events. The `clean_json_string()` function in `server/app.py` automatically detects and fixes JSON-encoded strings before serialization, ensuring clean JSON output.
+
+See `FIX_SUMMARY.md` for more details on the implementation.
+
+## License
+
+This project is open source and available under the MIT License.
+
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## Acknowledgments
 
-## 📝 License
+- [LangChain](https://www.langchain.com/) for the LLM framework
+- [LangGraph](https://langchain-ai.github.io/langgraph/) for stateful LLM applications
+- [OpenAI](https://openai.com/) for the GPT models
+- [Tavily](https://tavily.com/) for web search capabilities
+- [FastAPI](https://fastapi.tiangolo.com/) for the web framework
+- [Next.js](https://nextjs.org/) for the React framework
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+## Support
 
-## 🙏 Acknowledgments
-
-- Inspired by the UI and functionality of [Perplexity.ai](https://www.perplexity.ai/)
-- Built with [Next.js](https://nextjs.org/), [React](https://reactjs.org/), [FastAPI](https://fastapi.tiangolo.com/), and [LangGraph](https://github.com/langchain-ai/langgraph)
-- Powered by [OpenAI GPT-4o](https://openai.com/) and [Tavily Search API](https://tavily.com/)
+For issues and questions, please open an issue on the GitHub repository.

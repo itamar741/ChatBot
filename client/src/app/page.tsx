@@ -87,73 +87,7 @@ const Home = () => {
 
         eventSource.onmessage = (event) => {
           try {
-            // TEMPORARY WORKAROUND:
-            // The SSE stream occasionally returns double-encoded JSON (e.g. ""text"" or stringified arrays)
-            // coming from the server / LangGraph event stream.
-            //
-            // To prevent JSON.parse failures we attempt to sanitize the payload before parsing.
-            //
-            // This logic should be removed once the server emits valid JSON consistently.
-            // A future update will fix the serialization at the server level.
-            // Fix double-encoded JSON: handle double-encoded strings in any field
-            let rawData = event.data;
-            let data;
-            try {
-              data = JSON.parse(rawData);
-            } catch (parseError: unknown) {
-              // If parsing fails, try to fix double-encoded strings
-              // Pattern: "field":""value"" -> "field":"value"
-              // Also handle: "field":"["array"]" -> "field":["array"]
-              let fixedData = rawData;
-              
-              // Fix double-encoded strings: "field":""value"" -> "field":"value"
-              fixedData = fixedData.replace(/"([^"]+)":"("+)(.*?)("+)"/g, (_match: string, fieldName: string, _leadingQuotes: string, value: string, _trailingQuotes: string) => {
-                // Remove extra quotes from value
-                const cleanedValue = value.replace(/^"+|"+$/g, '');
-                // Escape any quotes in the value for JSON
-                const escapedValue = cleanedValue.replace(/"/g, '\\"');
-                return `"${fieldName}":"${escapedValue}"`;
-              });
-              
-              // Fix double-encoded arrays: "field":"["array"]" -> "field":["array"]
-              fixedData = fixedData.replace(/"([^"]+)":"(\[.*?\])"/g, (_match: string, fieldName: string, arrayStr: string) => {
-                return `"${fieldName}":${arrayStr}`;
-              });
-              
-              try {
-                data = JSON.parse(fixedData);
-              } catch (secondError: unknown) {
-                // If still fails, throw original error
-                throw parseError;
-              }
-            }
-            
-            // Post-process: fix any remaining double-encoded fields
-            if (data.type === 'search_start' && typeof data.query === 'string' && data.query.startsWith('"') && data.query.endsWith('"')) {
-              try {
-                data.query = JSON.parse(data.query);
-              } catch {
-                // If parsing fails, just remove the outer quotes
-                data.query = data.query.slice(1, -1);
-              }
-            }
-            if (data.type === 'search_results' && typeof data.urls === 'string') {
-              try {
-                data.urls = JSON.parse(data.urls);
-              } catch {
-                // If parsing fails, try to extract URLs from string
-                const urlMatch = data.urls.match(/\[(.*?)\]/);
-                if (urlMatch) {
-                  try {
-                    data.urls = JSON.parse(`[${urlMatch[1]}]`);
-                  } catch {
-                    data.urls = [];
-                  }
-                } else {
-                  data.urls = [];
-                }
-              }
-            }
+            const data = JSON.parse(event.data);
         
             if (data.type === 'checkpoint') {
               setCheckpointId(data.checkpoint_id);
